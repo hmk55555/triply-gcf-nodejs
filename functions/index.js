@@ -11,9 +11,11 @@ const {onCall} = require("firebase-functions/v2/https");
 // const {onRequest} = require("firebase-functions/v2/https");
 const logger = require("firebase-functions/logger");
 const {GoogleGenerativeAI} = require("@google/generative-ai");
+const { GoogleAIFileManager } = require("@google/generative-ai/server");
 const axios = require("axios");
 const sharp = require("sharp");
 const fs = require("fs").promises;
+require('dotenv').config();
 
 // Create and deploy your first functions
 // https://firebase.google.com/docs/functions/get-started
@@ -24,6 +26,7 @@ const { imageUrl, imageType } = request.data;
 
 logger.info("Inside onCall, imageUrl is " , imageUrl);
 logger.info("Inside onCall, imageType is " , imageType);
+console.log('Environment variables loaded:', process.env.GEMINI_API_KEY ? 'Yes' : 'No');
 
     const APIKEY = process.env.GEMINI_API_KEY;
     if (!APIKEY) {
@@ -37,17 +40,26 @@ logger.info("Inside onCall, imageType is " , imageType);
     const genAI = new GoogleGenerativeAI(APIKEY);
     const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro-002" });
 
+    const fileManager = new GoogleAIFileManager(APIKEY);
     // Download and process image
     response = await axios.get(imageUrl, { responseType: 'arraybuffer' });
     const tempPath = "/tmp/temp_image.jpg";
-    
-    // Convert and save image using sharp
     await sharp(response.data)
       .jpeg()
       .toFile(tempPath);
 
-    // Read the image file
-    const imageBytes = await fs.readFile(tempPath);
+  const uploadResult = await fileManager.uploadFile(
+  `${tempPath}`,
+    {
+      mimeType: "image/jpeg",
+      displayName: "ticket",
+    },
+  );
+
+  // View the response.
+console.log(
+  `Uploaded file ${uploadResult.file.displayName} as: ${uploadResult.file.uri}`,
+);
 
     // Define the schema for travel items
     const travelItemSchema = {
@@ -76,16 +88,32 @@ logger.info("Inside onCall, imageType is " , imageType);
 
     // Generate content using Gemini
     const prompt = "Extract JSON from image";
-    const result = await model.generateContent([imageBytes, "\n\n", prompt], {
-      responseMimeType: "application/json",
-      responseSchema: travelItemSchema
-    });
+    const result = await model.generateContent([
+      prompt,
+      {
+        fileData: {
+          fileUri: uploadResult.file.uri,
+          mimeType: uploadResult.file.mimeType,
+        },
+      },
+    ]);
+    console.log(result.response.text());
 
-    // Convert the result to a JSON string
-    const resultJson = result.text;
+    response = await result.response;
+    const resultJson = response.text();
+
+    // Add these debug logs
+    console.log('Raw response:', response);
+    console.log('Result text:', resultJson);
+
+    const cleanedText = resultJson
+            .replace(/```json/g, '')     // Remove JSON markers
+            .replace(/```/g, '')         // Remove code block markers
+            .replace(/^>\s+/gm, '')      // Remove '>' and spaces at start of lines
+            .trim();     
 
     // Validate the JSON format
-    if (!JSON.parse(resultJson)) {
+    if (!JSON.parse(cleanedText)) {
       return {
         status: "error",
         message: "Invalid JSON"
@@ -94,11 +122,6 @@ logger.info("Inside onCall, imageType is " , imageType);
 
     return {
       status: "success",
-      data: {
-        message: "Hello from Firebase!",
-        timestamp: new Date().toISOString(),
-        imageUrl: imageUrl || null,
-        imageType: null
-      }
+      data: JSON.parse(cleanedText)
     };
 });
