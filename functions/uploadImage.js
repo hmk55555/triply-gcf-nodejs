@@ -1,14 +1,19 @@
-// index.js
-const functions = require('firebase-functions');
+const {onRequest} = require("firebase-functions/v2/https");
 const admin = require('firebase-admin');
-const { Storage } = require('@google-cloud/storage');
+const { getStorage, getDownloadURL } = require('firebase-admin/storage');
+
+//const { Storage } = require('@google-cloud/storage');
+//import { getStorage, ref, getDownloadURL } from "firebase/storage";
+
 const path = require('path');
 const fs = require('fs');
 
 admin.initializeApp();
-const storage = new Storage();
+const storage = admin.storage();
 
-exports.uploadImage = functions.https.onRequest(async (req, res) => {
+exports.uploadImage = onRequest(
+    { cors: true },
+     async (req, res) => {
   console.log('Inside uploadImage function, request is:', req.body)
   const { imageFile, type, tripId, userId, bucketName } = req.body.data; // Changed imageFilePath to imageFile
   //const userId = req.user.uid; // Assuming user ID is available in the request context
@@ -17,7 +22,7 @@ exports.uploadImage = functions.https.onRequest(async (req, res) => {
   console.log('imageFile:', imageFile); // Updated log statement
   console.log('tripId:', tripId);
   console.log('userId:', userId);
-  console.log('userId:', bucketName);
+  console.log('bucketName:', bucketName);
   
   if (!userId || !imageFile || !tripId || !type || !bucketName) {
     console.log('Missing required parameter');
@@ -31,8 +36,8 @@ exports.uploadImage = functions.https.onRequest(async (req, res) => {
     // For trip-related images
     storagePath = `user_uploads/${userId}/trips/${tripId}/${type}/${fileName}`;
   } else {
-    // For general uploads
-    storagePath = `user_uploads/${userId}/${type}/${fileName}`;
+    // For trip cover uploads
+    storagePath = `user_uploads/${userId}/${type}/trip_cover.jpg`;
   }
   // Print the storagePath for debugging
   console.log('Storage Path:', storagePath);
@@ -41,13 +46,13 @@ exports.uploadImage = functions.https.onRequest(async (req, res) => {
     const buffer = Buffer.from(imageFile, 'base64'); // Decode base64 string to buffer
     await storage.bucket(bucketName).file(storagePath).save(buffer, { contentType: 'image/jpeg' }); // Save buffer to storage
     
-    const file = storage.bucket(bucketName).file(storagePath);
-    const downloadURL = `https://storage.googleapis.com/${file.bucket.name}/${file.name}`;
+    const fileRef = storage.bucket(bucketName).file(storagePath);
+    const downloadURL= await getDownloadURL(fileRef);
     console.log('Returning DownloadUrl:', downloadURL);
-    return {
+    return res.status(200).send({
         status: "success",
         data: downloadURL
-      };
+      });
     
   } catch (error) {
     console.error('Error uploading image:', error);
